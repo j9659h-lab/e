@@ -103,6 +103,7 @@ function checkSourceSet(): string[] {
   if (!existsSync(listPath)) return []
   try {
     const want = JSON.parse(readFileSync(listPath, 'utf8')) as Record<string, string>
+    const hex = (b: Buffer): string => createHash('sha256').update(b).digest('hex')
     const odd: string[] = []
     for (const [name, hash] of Object.entries(want)) {
       const p = join(srcDir, name)
@@ -110,7 +111,12 @@ function checkSourceSet(): string[] {
         odd.push(`${name} (없음)`)
         continue
       }
-      if (createHash('sha256').update(readFileSync(p)).digest('hex') !== hash) odd.push(`${name} (다른 판)`)
+      const raw = readFileSync(p)
+      if (hex(raw) === hash) continue
+      // 줄끝(CRLF/LF)만 다른 사본은 같은 판이다 — 깃 설정(text=auto 등)이 커밋하며 줄끝을 바꿔도
+      // 멀쩡한 배포를 어긋남으로 몰지 않게, CR 을 걷어낸 바이트로 한 번 더 맞춰 본다(대조표는 LF 기준).
+      if (hex(Buffer.from(raw.toString('utf8').replace(/\r/g, ''), 'utf8')) === hash) continue
+      odd.push(`${name} (다른 판)`)
     }
     return odd
   } catch {
@@ -164,6 +170,8 @@ const { httpServer, listAvatarRefs } = createRelay({
   // ⚠ 릴레이도 같은 폴더를 봐야 한다 — 관리 화면의 서버 데이터 내보내기/가져오기가 이 값으로 폴더를 훑는다.
   //   여기만 빠지면 볼륨을 다른 곳에 붙인 서버에서 '빈 백업'이 성공한 것처럼 내려간다.
   dataDir,
+  // /health 의 data 필드('fresh'/'used') — 볼륨이 안 붙어 매 배포 새 폴더로 시작하는 서버를 밖에서 알아보게.
+  dataFresh: dataState.fresh,
   auth: authStore,
   characters: charStore,
   rooms: roomStore,
@@ -388,7 +396,7 @@ httpServer.listen(PORT, () => {
   const oddFiles = checkSourceSet()
   if (oddFiles.length) {
     console.warn(
-      `[server] ⚠ 서버 파일 ${oddFiles.length}개가 다른 판입니다: ${oddFiles.slice(0, 8).join(', ')}${oddFiles.length > 8 ? ' …' : ''}\n` +
+      `[server] ⚠ 서버 파일 ${oddFiles.length}개가 다른 판입니다: ${oddFiles.join(', ')}\n` +
         '[server] ⚠ 새 판의 src 폴더를 통째로 덮어써 주세요. 일부만 바꾸면 기능을 쓰는 순간 서버가 멈출 수 있습니다.'
     )
   }
