@@ -5218,6 +5218,8 @@ export function createRelay(opts?: {
     // 토큰 클릭 연출 — 참가자 전용 창구(GM 불요). 카드 id 를 요청에서 받지 않고 '그 토큰에 GM 이
     // 묶어 둔 카드(clickCardId)'를 서버에서 찾아 재생한다 — 임의 카드 위조 방송 차단. 통합 레이어
     // 토큰은 요청 맵에 없으므로 GLOBAL 폴백. 카드별 짧은 스로틀로 연타 도배를 막는다.
+    // clickCardId 가 없어도 버튼 토큰에 press 효과음(sounds.press)만 있으면, 이미지 없는 '음향 전용'
+    // 카드를 그 자리에서 즉석으로 만들어 똑같이 전원 화면에 방송한다(클릭한 사람 혼자만 듣던 것을 해소).
     on('card:trigger', (req) => {
       const roomId = socket.data.roomId
       if (!roomId || !req || typeof req.mapId !== 'string' || typeof req.tokenId !== 'string') return
@@ -5227,11 +5229,16 @@ export function createRelay(opts?: {
       const token =
         store.getToken(roomId, req.mapId, req.tokenId) ??
         store.getToken(roomId, GLOBAL_MAP_ID, req.tokenId)
-      if (!token?.clickCardId) return
+      if (!token) return
       // 앞면을 볼 수 있는 뷰어만 — 뒷면/비공개 토큰의 와이어 표현은 묶임을 벗겨 보내므로(tokenForViewer)
       // 정상 클라는 애초에 못 쏘지만, 조작 클라가 id 만으로 GM 이 감춘 연출을 강제 재생하는 길을 서버가 막는다.
       if (!canSeeToken(token, { playerId, role: me.role })) return
-      const card = store.getVisualCard(roomId, token.clickCardId)
+      const isPressSoundOnly = !token.clickCardId
+      const card = token.clickCardId
+        ? store.getVisualCard(roomId, token.clickCardId)
+        : token.sounds?.press
+          ? { id: 'presssound:' + token.id, name: '(버튼 클릭음)', sound: token.sounds.press }
+          : undefined
       if (!card) return
       const key = roomId + ':' + card.id
       const now = Date.now()
@@ -5239,6 +5246,12 @@ export function createRelay(opts?: {
       if (now - last < CARD_TRIGGER_COOLDOWN_MS) return
       if (cardTriggerAt.size > 2000) cardTriggerAt.clear() // 방·카드 조합 누적 방지(쿨다운 짧아 리셋 무해)
       cardTriggerAt.set(key, now)
+      // press 효과음 전용 카드는 클릭한 본인이 이미 로컬로 즉시 들었으므로(Room 클라 패치),
+      // 자신을 뺀 나머지에게만 보낸다 — 안 그러면 클릭한 사람만 소리가 두 번(로컬+방송) 겹쳐 들린다.
+      if (isPressSoundOnly) {
+        socket.to(roomId).emit('room:cardplay', { card })
+        return
+      }
       io.to(roomId).emit('room:cardplay', { card })
     })
 
