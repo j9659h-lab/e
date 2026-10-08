@@ -3437,14 +3437,16 @@ export function createRelay(opts?: {
           res.end()
           return
         }
-        // 해시 파일명(assets/)은 불변 캐시, index.html·yt.html 등 이름 고정 파일은 항상 재검증(재배포 즉시 반영).
-        // ⚠ webRoot '상대' 경로로 판정 — 절대경로 검사면 상위 폴더명에 assets 가 있을 때 전부 불변 캐시가 된다.
-        const immutable = f.rel.startsWith(`assets${sep}`)
+        // 원래는 해시 파일명(assets/)은 불변 캐시, index.html 등 이름 고정 파일만 항상 재검증하는 정책이었다.
+        // 이름은 그대로 두고 내용만 손으로 바꿔치기하는 핫픽스 운영 방식과는 "이름이 같으면 내용도 같다"는
+        // immutable 의 전제가 어긋나서, 패치할 때마다 방문자가 브라우저 캐시를 수동으로 지워야 했다.
+        // 그래서 전부 'no-cache'(매 요청마다 ETag 로 재검증, 안 바뀌었으면 304)로 통일 — 재배포 즉시 반영되고,
+        // 내용이 그대로면 304 응답이라 트래픽 부담도 작다.
         const head: Record<string, string | number> = {
           'content-type': f.type,
           'content-length': f.size,
           etag: f.etag,
-          'cache-control': immutable ? 'public, max-age=31536000, immutable' : 'no-cache',
+          'cache-control': 'no-cache',
           'x-content-type-options': 'nosniff'
         }
         // 문서에만 정책을 건다(스크립트·스타일 파일에 붙여 봐야 의미가 없고, 하위 리소스는 문서 정책을 따른다).
