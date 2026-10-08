@@ -3427,8 +3427,19 @@ export function createRelay(opts?: {
     if ((req.method === 'GET' || req.method === 'HEAD') && req.url) {
       const f = resolveWebFile(req.url)
       if (f) {
+        // 1회성 캐시 비우기 — 예전 정책(assets/ 1년 immutable)으로 이미 저장해 둔 기기는 새 정책을 받을 기회가 없어
+        // 옛 파일을 계속 쓴다. 메인 문서(index.html)를 처음 받는 브라우저에만 Clear-Site-Data: "cache" 를 실어 한 번 비우고,
+        // 쿠키로 '비웠음'을 표시해 다시는 보내지 않는다(매 접속마다 비우면 캐시가 의미 없어진다).
+        // "cache" 만 지정 — 쿠키·저장소는 건드리지 않으니 로그인은 유지된다. https 에서만 효과가 있고(미지원 브라우저는 무시),
+        // 정책을 다시 한 번 비우고 싶으면 CACHE_PURGE_COOKIE 값을 올리면 된다.
+        const CACHE_PURGE_COOKIE = 'tkb_cache_v=2'
+        const cookieHdr = typeof req.headers.cookie === 'string' ? req.headers.cookie : ''
+        const needPurge =
+          req.method === 'GET' &&
+          f.rel === 'index.html' &&
+          !cookieHdr.split(';').some((c: string) => c.trim() === CACHE_PURGE_COOKIE)
         // 재검증이 304 로 끝나게(약검증자 — 크기+수정시각. 재배포로 파일이 바뀌면 태그도 바뀐다).
-        if (req.headers['if-none-match'] === f.etag) {
+        if (!needPurge && req.headers['if-none-match'] === f.etag) {
           const head304: Record<string, string> = { etag: f.etag }
           // 304 에 빠진 헤더는 브라우저가 캐시본의 것을 그대로 쓴다. 정책만 바뀌고 파일은 그대로인 배포에서
           // 옛 정책이 계속 적용되지 않도록, 재검증 응답에도 같은 정책을 실어 보낸다.
@@ -3451,6 +3462,10 @@ export function createRelay(opts?: {
         }
         // 문서에만 정책을 건다(스크립트·스타일 파일에 붙여 봐야 의미가 없고, 하위 리소스는 문서 정책을 따른다).
         if (f.type.startsWith('text/html')) head['content-security-policy'] = WEB_CSP
+        if (needPurge) {
+          head['clear-site-data'] = '"cache"'
+          head['set-cookie'] = `${CACHE_PURGE_COOKIE}; Max-Age=31536000; Path=/; SameSite=Lax`
+        }
         res.writeHead(200, head)
         if (req.method === 'HEAD') {
           res.end()
